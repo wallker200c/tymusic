@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, SlashCommandBuilder, REST, Routes } = require('discord.js');
+const { Client, GatewayIntentBits, SlashCommandBuilder, REST, Routes, EmbedBuilder } = require('discord.js');
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, entersState, VoiceConnectionStatus } = require('@discordjs/voice');
 const play = require('play-dl');
 
@@ -8,6 +8,7 @@ const client = new Client({
 
 const queues = new Map();
 
+// Comandos globais
 const commands = [
   new SlashCommandBuilder()
     .setName('play')
@@ -17,30 +18,34 @@ const commands = [
   new SlashCommandBuilder().setName('stop').setDescription('Parar tudo')
 ].map(cmd => cmd.toJSON());
 
+// Registro global dos comandos
 client.once('clientReady', async () => {
   console.log(`🔥 Online: ${client.user.tag}`);
+
   const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
   await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
 });
 
-client.on('interactionCreate', async (interaction) => {
+// Interações
+client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
-  await interaction.deferReply();
-
-  if (!interaction.guild || !interaction.member) {
-    return interaction.editReply('❌ Use em servidor.');
-  }
-
-  const member = interaction.member;
-  if (!member.voice || !member.voice.channel) {
-    return interaction.editReply('❌ Entre em um canal de voz!');
-  }
-
-  const voiceChannel = member.voice.channel;
-  let serverQueue = queues.get(interaction.guild.id);
+  await interaction.deferReply(); // evita "pensando..."
 
   try {
+    if (!interaction.guild || !interaction.member) {
+      return interaction.editReply('❌ Use em servidor.');
+    }
+
+    const member = interaction.member;
+    if (!member.voice || !member.voice.channel) {
+      return interaction.editReply('❌ Entre em um canal de voz!');
+    }
+
+    const voiceChannel = member.voice.channel;
+    let serverQueue = queues.get(interaction.guild.id);
+
+    // Comando /play
     if (interaction.commandName === 'play') {
       const query = interaction.options.getString('nome');
       const result = await play.search(query, { limit: 1 }).catch(() => null);
@@ -50,16 +55,18 @@ client.on('interactionCreate', async (interaction) => {
       const song = { title: result[0].title, url: result[0].url };
 
       if (!serverQueue) {
+        // Cria fila e player
         serverQueue = { voiceChannel, connection: null, player: createAudioPlayer(), songs: [] };
         queues.set(interaction.guild.id, serverQueue);
 
+        // Conecta ao canal
         const connection = joinVoiceChannel({
           channelId: voiceChannel.id,
           guildId: interaction.guild.id,
           adapterCreator: interaction.guild.voiceAdapterCreator
         });
 
-        // Aguarda a conexão ficar pronta antes de tocar
+        // Espera conexão ficar pronta
         await entersState(connection, VoiceConnectionStatus.Ready, 15000).catch(() => {
           connection.destroy();
           throw new Error('❌ Falha ao conectar ao canal de voz.');
@@ -70,19 +77,27 @@ client.on('interactionCreate', async (interaction) => {
       }
 
       serverQueue.songs.push(song);
-      await interaction.editReply(`🎶 Adicionado à fila: **${song.title}**`);
+
+      const embed = new EmbedBuilder()
+        .setTitle('🎶 Adicionado à fila')
+        .setDescription(`[${song.title}](${song.url})`)
+        .setColor('Blue');
+
+      await interaction.editReply({ embeds: [embed] });
 
       if (serverQueue.songs.length === 1) {
         playSong(interaction.guild);
       }
     }
 
+    // Comando /skip
     if (interaction.commandName === 'skip') {
       if (!serverQueue) return interaction.editReply('❌ Nada tocando');
       serverQueue.player.stop();
       return interaction.editReply('⏭️ Pulado!');
     }
 
+    // Comando /stop
     if (interaction.commandName === 'stop') {
       if (!serverQueue) return interaction.editReply('❌ Nada tocando');
       serverQueue.songs = [];
@@ -94,10 +109,11 @@ client.on('interactionCreate', async (interaction) => {
 
   } catch (err) {
     console.error(err);
-    interaction.editReply(`❌ Erro: ${err.message}`);
+    return interaction.editReply(`❌ Erro: ${err.message}`);
   }
 });
 
+// Função para tocar música
 async function playSong(guild) {
   const serverQueue = queues.get(guild.id);
   if (!serverQueue || !serverQueue.songs.length) {
