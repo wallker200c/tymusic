@@ -34,31 +34,38 @@ client.on('interactionCreate', async (interaction) => {
 
   const { commandName } = interaction;
 
-  // 🔥 RESPONDE RÁPIDO (evita erro do Discord)
+  // 🔥 responde imediatamente (evita "pensando...")
   await interaction.deferReply();
 
-  // 🔥 pega o membro corretamente
-  const member = await interaction.guild.members.fetch(interaction.user.id);
-  const voiceChannel = member.voice.channel;
+  try {
+    const member = await interaction.guild.members.fetch(interaction.user.id);
+    const voiceChannel = member.voice.channel;
 
-  if (!voiceChannel) {
-    return interaction.editReply('❌ Entre em um canal de voz!');
-  }
+    if (!voiceChannel) {
+      return interaction.editReply('❌ Entre em um canal de voz!');
+    }
 
-  let serverQueue = queues.get(interaction.guild.id);
+    let serverQueue = queues.get(interaction.guild.id);
 
-  if (commandName === 'play') {
-    try {
+    if (commandName === 'play') {
       const query = interaction.options.getString('nome');
 
-      const result = await play.search(query, { limit: 1 });
-      if (!result.length)
-        return interaction.editReply('❌ Música não encontrada');
+      // 🔥 busca com proteção de tempo
+      const result = await Promise.race([
+        play.search(query, { limit: 1 }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Timeout na busca')), 10000)
+        )
+      ]).catch(() => null);
+
+      if (!result || !result.length) {
+        return interaction.editReply('❌ Música não encontrada ou demorou muito.');
+      }
 
       const song = {
         title: result[0].title,
         url: result[0].url,
-        thumbnail: result[0].thumbnails[0].url
+        thumbnail: result[0].thumbnails?.[0]?.url || null
       };
 
       if (!serverQueue) {
@@ -68,6 +75,7 @@ client.on('interactionCreate', async (interaction) => {
           player: createAudioPlayer(),
           songs: []
         };
+
         queues.set(interaction.guild.id, serverQueue);
 
         const connection = joinVoiceChannel({
@@ -85,48 +93,49 @@ client.on('interactionCreate', async (interaction) => {
       const embed = new EmbedBuilder()
         .setTitle('🎶 Música adicionada')
         .setDescription(`[${song.title}](${song.url})`)
-        .setThumbnail(song.thumbnail)
         .setColor('Blue');
+
+      if (song.thumbnail) embed.setThumbnail(song.thumbnail);
 
       await interaction.editReply({ embeds: [embed] });
 
       if (serverQueue.songs.length === 1) {
         playSong(interaction.guild);
       }
-
-    } catch (err) {
-      console.error(err);
-      interaction.editReply('❌ Erro ao tocar música');
     }
-  }
 
-  if (commandName === 'skip') {
-    if (!serverQueue) return interaction.editReply('❌ Nada tocando');
-    serverQueue.player.stop();
-    interaction.editReply('⏭️ Pulado!');
-  }
+    if (commandName === 'skip') {
+      if (!serverQueue) return interaction.editReply('❌ Nada tocando');
+      serverQueue.player.stop();
+      interaction.editReply('⏭️ Pulado!');
+    }
 
-  if (commandName === 'pause') {
-    if (!serverQueue) return interaction.editReply('❌ Nada tocando');
-    serverQueue.player.pause();
-    interaction.editReply('⏸️ Pausado!');
-  }
+    if (commandName === 'pause') {
+      if (!serverQueue) return interaction.editReply('❌ Nada tocando');
+      serverQueue.player.pause();
+      interaction.editReply('⏸️ Pausado!');
+    }
 
-  if (commandName === 'resume') {
-    if (!serverQueue) return interaction.editReply('❌ Nada tocando');
-    serverQueue.player.unpause();
-    interaction.editReply('▶️ Continuando!');
-  }
+    if (commandName === 'resume') {
+      if (!serverQueue) return interaction.editReply('❌ Nada tocando');
+      serverQueue.player.unpause();
+      interaction.editReply('▶️ Continuando!');
+    }
 
-  if (commandName === 'stop') {
-    if (!serverQueue) return interaction.editReply('❌ Nada tocando');
+    if (commandName === 'stop') {
+      if (!serverQueue) return interaction.editReply('❌ Nada tocando');
 
-    serverQueue.songs = [];
-    serverQueue.player.stop();
-    serverQueue.connection.destroy();
-    queues.delete(interaction.guild.id);
+      serverQueue.songs = [];
+      serverQueue.player.stop();
+      serverQueue.connection.destroy();
+      queues.delete(interaction.guild.id);
 
-    interaction.editReply('⛔ Parado!');
+      interaction.editReply('⛔ Parado!');
+    }
+
+  } catch (err) {
+    console.error(err);
+    interaction.editReply('❌ Deu erro no comando.');
   }
 });
 
@@ -142,9 +151,12 @@ async function playSong(guild) {
   const song = serverQueue.songs[0];
 
   try {
-    const stream = await play.stream(song.url, {
-      discordPlayerCompatibility: true
-    });
+    const stream = await play.stream(song.url).catch(() => null);
+
+    if (!stream) {
+      serverQueue.songs.shift();
+      return playSong(guild);
+    }
 
     const resource = createAudioResource(stream.stream, {
       inputType: stream.type
