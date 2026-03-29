@@ -3,22 +3,32 @@ const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerSta
 const play = require('play-dl');
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates]
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildVoiceStates
+  ]
 });
 
 const queues = new Map();
 
 const commands = [
-  new SlashCommandBuilder().setName('play').setDescription('Tocar música').addStringOption(opt =>
-    opt.setName('nome').setDescription('Nome da música').setRequired(true)
-  ),
+  new SlashCommandBuilder()
+    .setName('play')
+    .setDescription('Tocar música')
+    .addStringOption(opt =>
+      opt.setName('nome')
+        .setDescription('Nome da música')
+        .setRequired(true)
+    ),
+
   new SlashCommandBuilder().setName('skip').setDescription('Pular música'),
   new SlashCommandBuilder().setName('pause').setDescription('Pausar'),
   new SlashCommandBuilder().setName('resume').setDescription('Continuar'),
   new SlashCommandBuilder().setName('stop').setDescription('Parar tudo')
+
 ].map(cmd => cmd.toJSON());
 
-client.once('ready', async () => {
+client.once('clientReady', async () => {
   console.log(`🔥 Online: ${client.user.tag}`);
 
   const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
@@ -32,40 +42,46 @@ client.once('ready', async () => {
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
-  const { commandName } = interaction;
-
-  // 🔥 responde imediatamente (evita "pensando...")
   await interaction.deferReply();
 
   try {
-    const member = await interaction.guild.members.fetch(interaction.user.id);
-    const voiceChannel = member.voice.channel;
 
-    if (!voiceChannel) {
+    // 🔥 CORREÇÃO DO CRASH (guild null)
+    if (!interaction.guild) {
+      return interaction.editReply('❌ Use isso dentro de um servidor.');
+    }
+
+    const member = interaction.member;
+
+    if (!member || !member.voice || !member.voice.channel) {
       return interaction.editReply('❌ Entre em um canal de voz!');
     }
 
+    const voiceChannel = member.voice.channel;
     let serverQueue = queues.get(interaction.guild.id);
 
+    const { commandName } = interaction;
+
+    // ================= PLAY =================
     if (commandName === 'play') {
+
       const query = interaction.options.getString('nome');
 
-      // 🔥 busca com proteção de tempo
       const result = await Promise.race([
         play.search(query, { limit: 1 }),
         new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Timeout na busca')), 10000)
+          setTimeout(() => reject(new Error('Timeout')), 10000)
         )
       ]).catch(() => null);
 
       if (!result || !result.length) {
-        return interaction.editReply('❌ Música não encontrada ou demorou muito.');
+        return interaction.editReply('❌ Música não encontrada.');
       }
 
       const song = {
         title: result[0].title,
         url: result[0].url,
-        thumbnail: result[0].thumbnails?.[0]?.url || null
+        thumbnail: result[0].thumbnails?.[0]?.url
       };
 
       if (!serverQueue) {
@@ -104,24 +120,28 @@ client.on('interactionCreate', async (interaction) => {
       }
     }
 
+    // ================= SKIP =================
     if (commandName === 'skip') {
       if (!serverQueue) return interaction.editReply('❌ Nada tocando');
       serverQueue.player.stop();
-      interaction.editReply('⏭️ Pulado!');
+      return interaction.editReply('⏭️ Pulado!');
     }
 
+    // ================= PAUSE =================
     if (commandName === 'pause') {
       if (!serverQueue) return interaction.editReply('❌ Nada tocando');
       serverQueue.player.pause();
-      interaction.editReply('⏸️ Pausado!');
+      return interaction.editReply('⏸️ Pausado!');
     }
 
+    // ================= RESUME =================
     if (commandName === 'resume') {
       if (!serverQueue) return interaction.editReply('❌ Nada tocando');
       serverQueue.player.unpause();
-      interaction.editReply('▶️ Continuando!');
+      return interaction.editReply('▶️ Continuando!');
     }
 
+    // ================= STOP =================
     if (commandName === 'stop') {
       if (!serverQueue) return interaction.editReply('❌ Nada tocando');
 
@@ -130,16 +150,18 @@ client.on('interactionCreate', async (interaction) => {
       serverQueue.connection.destroy();
       queues.delete(interaction.guild.id);
 
-      interaction.editReply('⛔ Parado!');
+      return interaction.editReply('⛔ Parado!');
     }
 
   } catch (err) {
     console.error(err);
-    interaction.editReply('❌ Deu erro no comando.');
+    interaction.editReply('❌ Erro no comando.');
   }
 });
 
+// ================= PLAYER =================
 async function playSong(guild) {
+
   const serverQueue = queues.get(guild.id);
 
   if (!serverQueue || !serverQueue.songs.length) {
