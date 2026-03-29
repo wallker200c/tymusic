@@ -1,3 +1,4 @@
+// index.js
 const { Client, GatewayIntentBits, EmbedBuilder, SlashCommandBuilder, REST, Routes } = require('discord.js');
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus } = require('@discordjs/voice');
 const play = require('play-dl');
@@ -11,6 +12,7 @@ const client = new Client({
 
 const queues = new Map();
 
+// Comandos globais
 const commands = [
   new SlashCommandBuilder()
     .setName('play')
@@ -20,45 +22,53 @@ const commands = [
         .setDescription('Nome da música')
         .setRequired(true)
     ),
-  new SlashCommandBuilder().setName('skip').setDescription('Pular'),
-  new SlashCommandBuilder().setName('stop').setDescription('Parar')
+  new SlashCommandBuilder()
+    .setName('skip')
+    .setDescription('Pular música'),
+  new SlashCommandBuilder()
+    .setName('stop')
+    .setDescription('Parar tudo')
 ].map(cmd => cmd.toJSON());
 
+// Evento quando o bot estiver online
 client.once('clientReady', async () => {
   console.log(`🔥 Online: ${client.user.tag}`);
 
   const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
 
+  // Registrar comandos globais
   await rest.put(
     Routes.applicationCommands(client.user.id),
     { body: commands }
   );
+  console.log('✅ Comandos globais registrados!');
 });
 
+// Interações com comandos
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
-  // 🔥 responde IMEDIATO (evita "pensando...")
+  // Responder imediatamente
   await interaction.deferReply();
 
   try {
-    // 🔥 proteção TOTAL
+    // Proteção total: deve ser usado em servidor
     if (!interaction.guild || !interaction.member) {
-      return interaction.editReply('❌ Use em servidor.');
+      return interaction.editReply('❌ Use este comando em um servidor.');
     }
 
     const member = interaction.member;
 
     if (!member.voice || !member.voice.channel) {
-      return interaction.editReply('❌ Entre em um canal de voz!');
+      return interaction.editReply('❌ Entre em um canal de voz primeiro!');
     }
 
     const voiceChannel = member.voice.channel;
     let serverQueue = queues.get(interaction.guild.id);
 
+    // Comando play
     if (interaction.commandName === 'play') {
       const query = interaction.options.getString('nome');
-
       const result = await play.search(query, { limit: 1 }).catch(() => null);
 
       if (!result || !result.length) {
@@ -77,7 +87,6 @@ client.on('interactionCreate', async (interaction) => {
           player: createAudioPlayer(),
           songs: []
         };
-
         queues.set(interaction.guild.id, serverQueue);
 
         const connection = joinVoiceChannel({
@@ -91,20 +100,21 @@ client.on('interactionCreate', async (interaction) => {
       }
 
       serverQueue.songs.push(song);
-
-      await interaction.editReply(`🎶 Tocando: ${song.title}`);
+      await interaction.editReply(`🎶 Adicionado à fila: **${song.title}**`);
 
       if (serverQueue.songs.length === 1) {
         playSong(interaction.guild);
       }
     }
 
+    // Comando skip
     if (interaction.commandName === 'skip') {
       if (!serverQueue) return interaction.editReply('❌ Nada tocando');
       serverQueue.player.stop();
       return interaction.editReply('⏭️ Pulado!');
     }
 
+    // Comando stop
     if (interaction.commandName === 'stop') {
       if (!serverQueue) return interaction.editReply('❌ Nada tocando');
 
@@ -118,10 +128,11 @@ client.on('interactionCreate', async (interaction) => {
 
   } catch (err) {
     console.error('ERRO:', err);
-    interaction.editReply('❌ Deu erro no comando.');
+    interaction.editReply('❌ Ocorreu um erro ao executar o comando.');
   }
 });
 
+// Função de tocar música
 async function playSong(guild) {
   const serverQueue = queues.get(guild.id);
 
@@ -135,16 +146,12 @@ async function playSong(guild) {
 
   try {
     const stream = await play.stream(song.url).catch(() => null);
-
     if (!stream) {
       serverQueue.songs.shift();
       return playSong(guild);
     }
 
-    const resource = createAudioResource(stream.stream, {
-      inputType: stream.type
-    });
-
+    const resource = createAudioResource(stream.stream, { inputType: stream.type });
     serverQueue.player.play(resource);
 
     serverQueue.player.once(AudioPlayerStatus.Idle, () => {
@@ -159,4 +166,5 @@ async function playSong(guild) {
   }
 }
 
+// Login do bot
 client.login(process.env.TOKEN);
