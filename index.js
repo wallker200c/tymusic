@@ -20,12 +20,8 @@ const commands = [
         .setDescription('Nome da música')
         .setRequired(true)
     ),
-
-  new SlashCommandBuilder().setName('skip').setDescription('Pular música'),
-  new SlashCommandBuilder().setName('pause').setDescription('Pausar'),
-  new SlashCommandBuilder().setName('resume').setDescription('Continuar'),
-  new SlashCommandBuilder().setName('stop').setDescription('Parar tudo')
-
+  new SlashCommandBuilder().setName('skip').setDescription('Pular'),
+  new SlashCommandBuilder().setName('stop').setDescription('Parar')
 ].map(cmd => cmd.toJSON());
 
 client.once('clientReady', async () => {
@@ -42,37 +38,28 @@ client.once('clientReady', async () => {
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
+  // 🔥 responde IMEDIATO (evita "pensando...")
   await interaction.deferReply();
 
   try {
-
-    // 🔥 CORREÇÃO DO CRASH (guild null)
-    if (!interaction.guild) {
-      return interaction.editReply('❌ Use isso dentro de um servidor.');
+    // 🔥 proteção TOTAL
+    if (!interaction.guild || !interaction.member) {
+      return interaction.editReply('❌ Use em servidor.');
     }
 
     const member = interaction.member;
 
-    if (!member || !member.voice || !member.voice.channel) {
+    if (!member.voice || !member.voice.channel) {
       return interaction.editReply('❌ Entre em um canal de voz!');
     }
 
     const voiceChannel = member.voice.channel;
     let serverQueue = queues.get(interaction.guild.id);
 
-    const { commandName } = interaction;
-
-    // ================= PLAY =================
-    if (commandName === 'play') {
-
+    if (interaction.commandName === 'play') {
       const query = interaction.options.getString('nome');
 
-      const result = await Promise.race([
-        play.search(query, { limit: 1 }),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Timeout')), 10000)
-        )
-      ]).catch(() => null);
+      const result = await play.search(query, { limit: 1 }).catch(() => null);
 
       if (!result || !result.length) {
         return interaction.editReply('❌ Música não encontrada.');
@@ -80,8 +67,7 @@ client.on('interactionCreate', async (interaction) => {
 
       const song = {
         title: result[0].title,
-        url: result[0].url,
-        thumbnail: result[0].thumbnails?.[0]?.url
+        url: result[0].url
       };
 
       if (!serverQueue) {
@@ -106,43 +92,20 @@ client.on('interactionCreate', async (interaction) => {
 
       serverQueue.songs.push(song);
 
-      const embed = new EmbedBuilder()
-        .setTitle('🎶 Música adicionada')
-        .setDescription(`[${song.title}](${song.url})`)
-        .setColor('Blue');
-
-      if (song.thumbnail) embed.setThumbnail(song.thumbnail);
-
-      await interaction.editReply({ embeds: [embed] });
+      await interaction.editReply(`🎶 Tocando: ${song.title}`);
 
       if (serverQueue.songs.length === 1) {
         playSong(interaction.guild);
       }
     }
 
-    // ================= SKIP =================
-    if (commandName === 'skip') {
+    if (interaction.commandName === 'skip') {
       if (!serverQueue) return interaction.editReply('❌ Nada tocando');
       serverQueue.player.stop();
       return interaction.editReply('⏭️ Pulado!');
     }
 
-    // ================= PAUSE =================
-    if (commandName === 'pause') {
-      if (!serverQueue) return interaction.editReply('❌ Nada tocando');
-      serverQueue.player.pause();
-      return interaction.editReply('⏸️ Pausado!');
-    }
-
-    // ================= RESUME =================
-    if (commandName === 'resume') {
-      if (!serverQueue) return interaction.editReply('❌ Nada tocando');
-      serverQueue.player.unpause();
-      return interaction.editReply('▶️ Continuando!');
-    }
-
-    // ================= STOP =================
-    if (commandName === 'stop') {
+    if (interaction.commandName === 'stop') {
       if (!serverQueue) return interaction.editReply('❌ Nada tocando');
 
       serverQueue.songs = [];
@@ -154,14 +117,12 @@ client.on('interactionCreate', async (interaction) => {
     }
 
   } catch (err) {
-    console.error(err);
-    interaction.editReply('❌ Erro no comando.');
+    console.error('ERRO:', err);
+    interaction.editReply('❌ Deu erro no comando.');
   }
 });
 
-// ================= PLAYER =================
 async function playSong(guild) {
-
   const serverQueue = queues.get(guild.id);
 
   if (!serverQueue || !serverQueue.songs.length) {
